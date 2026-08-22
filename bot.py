@@ -18,6 +18,7 @@ TOKEN = config["token"]
 GUILD_ID = config["guild_id"]
 STAFF_ROLE_ID = config["staff_role_id"]
 OWNER_IDS = config["owner_ids"]
+ROLE_LOG_CHANNEL_ID = config.get("role_log_channel_id", 0)
 
 
 # ==============================
@@ -386,6 +387,264 @@ async def unmute(
 
 
 # ==============================
+# ROL VER
+# ==============================
+
+@bot.tree.command(
+    name="rol-ver",
+    description="Bir kullanıcıya rol verir.",
+    guild=GUILD
+)
+@app_commands.describe(
+    user="Rol verilecek kişi",
+    role="Verilecek rol",
+    reason="Rol verme sebebi"
+)
+async def rol_ver(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    role: discord.Role,
+    reason: str = "Sebep belirtilmedi."
+):
+    if not await check_permission(interaction):
+        return
+
+    me = interaction.guild.me
+
+    if me is None:
+        await interaction.response.send_message(
+            "❌ Bot sunucudaki kendi üyesini bulamadı.",
+            ephemeral=True
+        )
+        return
+
+    if role.is_default() or role.managed:
+        await interaction.response.send_message(
+            "❌ Bu rol verilemez.",
+            ephemeral=True
+        )
+        return
+
+    if role >= me.top_role:
+        await interaction.response.send_message(
+            "❌ Botun rolü, verilecek rolden daha yukarıda olmalı.",
+            ephemeral=True
+        )
+        return
+
+    if user.top_role >= me.top_role:
+        await interaction.response.send_message(
+            "❌ Bu kullanıcıya rol veremem; kullanıcı botun rolüne eşit veya daha yüksek bir role sahip.",
+            ephemeral=True
+        )
+        return
+
+    if role in user.roles:
+        await interaction.response.send_message(
+            f"ℹ️ {user.mention} kullanıcısında **{role.name}** rolü zaten var.",
+            ephemeral=True
+        )
+        return
+
+    try:
+        await user.add_roles(
+            role,
+            reason=f"{reason} | Yetkili: {interaction.user} ({interaction.user.id})"
+        )
+
+        await interaction.response.send_message(
+            f"✅ {user.mention} kullanıcısına **{role.name}** rolü verildi.\n"
+            f"**Sebep:** {reason}"
+        )
+
+        if ROLE_LOG_CHANNEL_ID:
+            log_channel = bot.get_channel(ROLE_LOG_CHANNEL_ID)
+
+            if log_channel is not None:
+                embed = discord.Embed(
+                    title="🟢 Rol Verildi",
+                    color=discord.Color.green(),
+                    timestamp=discord.utils.utcnow()
+                )
+                embed.add_field(
+                    name="Kullanıcı",
+                    value=f"{user.mention}\n`{user.id}`",
+                    inline=True
+                )
+                embed.add_field(
+                    name="Rol",
+                    value=f"{role.mention}\n`{role.id}`",
+                    inline=True
+                )
+                embed.add_field(
+                    name="Yetkili",
+                    value=f"{interaction.user.mention}\n`{interaction.user.id}`",
+                    inline=False
+                )
+                embed.add_field(
+                    name="Sebep",
+                    value=reason,
+                    inline=False
+                )
+
+                try:
+                    await log_channel.send(embed=embed)
+                except discord.Forbidden:
+                    print(
+                        f"❌ Rol log kanalına mesaj gönderilemiyor: "
+                        f"{ROLE_LOG_CHANNEL_ID}"
+                    )
+            else:
+                print(
+                    f"❌ Rol log kanalı bulunamadı: "
+                    f"{ROLE_LOG_CHANNEL_ID}"
+                )
+
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "❌ Botun bu rolü verme yetkisi yok.",
+            ephemeral=True
+        )
+    except discord.HTTPException as error:
+        await interaction.response.send_message(
+            f"❌ Rol verme sırasında Discord hatası oluştu: {error}",
+            ephemeral=True
+        )
+
+
+# ==============================
+# ROL AL
+# ==============================
+
+@bot.tree.command(
+    name="rol-al",
+    description="Bir kullanıcıdan rol alır.",
+    guild=GUILD
+)
+@app_commands.describe(
+    user="Rolü alınacak kişi",
+    role="Alınacak rol",
+    reason="Rol alma sebebi"
+)
+async def rol_al(
+    interaction: discord.Interaction,
+    user: discord.Member,
+    role: discord.Role,
+    reason: str = "Sebep belirtilmedi."
+):
+    if not await check_permission(interaction):
+        return
+
+    me = interaction.guild.me
+
+    if me is None:
+        await interaction.response.send_message(
+            "❌ Bot sunucudaki kendi üyesini bulamadı.",
+            ephemeral=True
+        )
+        return
+
+    if role.is_default() or role.managed:
+        await interaction.response.send_message(
+            "❌ Bu rol alınamaz.",
+            ephemeral=True
+        )
+        return
+
+    if role >= me.top_role:
+        await interaction.response.send_message(
+            "❌ Botun rolü, alınacak rolden daha yukarıda olmalı.",
+            ephemeral=True
+        )
+        return
+
+    if role not in user.roles:
+        await interaction.response.send_message(
+            f"ℹ️ {user.mention} kullanıcısında **{role.name}** rolü yok.",
+            ephemeral=True
+        )
+        return
+
+    try:
+        await user.remove_roles(
+            role,
+            reason=f"{reason} | Yetkili: {interaction.user} ({interaction.user.id})"
+        )
+
+        await interaction.response.send_message(
+            f"✅ {user.mention} kullanıcısından **{role.name}** rolü alındı.\n"
+            f"**Sebep:** {reason}"
+        )
+
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "❌ Botun bu rolü alma yetkisi yok.",
+            ephemeral=True
+        )
+    except discord.HTTPException as error:
+        await interaction.response.send_message(
+            f"❌ Rol alma sırasında Discord hatası oluştu: {error}",
+            ephemeral=True
+        )
+
+
+# ==============================
+# DUYURU
+# ==============================
+
+@bot.tree.command(
+    name="duyuru",
+    description="Bulunduğun kanala duyuru gönderir.",
+    guild=GUILD
+)
+@app_commands.describe(
+    message="Duyuru mesajı"
+)
+async def duyuru(
+    interaction: discord.Interaction,
+    message: str
+):
+    if not await check_permission(interaction):
+        return
+
+    if interaction.channel is None:
+        await interaction.response.send_message(
+            "❌ Duyuru kanalı bulunamadı.",
+            ephemeral=True
+        )
+        return
+
+    embed = discord.Embed(
+        title="📢 DUYURU",
+        description=message,
+        color=discord.Color.blue(),
+        timestamp=discord.utils.utcnow()
+    )
+    embed.set_footer(
+        text=f"Duyuran: {interaction.user}"
+    )
+
+    try:
+        await interaction.channel.send(embed=embed)
+
+        await interaction.response.send_message(
+            "✅ Duyuru gönderildi.",
+            ephemeral=True
+        )
+
+    except discord.Forbidden:
+        await interaction.response.send_message(
+            "❌ Botun bu kanala mesaj gönderme yetkisi yok.",
+            ephemeral=True
+        )
+    except discord.HTTPException as error:
+        await interaction.response.send_message(
+            f"❌ Duyuru gönderilirken Discord hatası oluştu: {error}",
+            ephemeral=True
+        )
+
+
+# ==============================
 # TERMINAL
 # ==============================
 
@@ -522,6 +781,57 @@ async def terminal():
 
                 continue
 
+            # ==========================
+            # KANALLARI LİSTELE
+            # ==========================
+
+            if text.lower() == "channels":
+                guild = bot.get_guild(GUILD_ID)
+
+                if guild is None:
+                    print("❌ Sunucu bulunamadı.")
+                    continue
+
+                print("")
+                print("📢 SUNUCUDAKİ KANALLAR")
+                print("================================")
+
+                for channel in guild.channels:
+                    print(
+                        f"{channel.name}\n"
+                        f"ID: {channel.id}\n"
+                        f"Tür: {channel.type}"
+                    )
+                    print("--------------------------------")
+
+                continue
+
+
+            # ==========================
+            # ROLLERİ LİSTELE
+            # ==========================
+
+            if text.lower() == "roles":
+                guild = bot.get_guild(GUILD_ID)
+
+                if guild is None:
+                    print("❌ Sunucu bulunamadı.")
+                    continue
+
+                print("")
+                print("🛡️ SUNUCUDAKİ ROLLER")
+                print("================================")
+
+                for role in reversed(guild.roles):
+                    print(
+                        f"{role.name}\n"
+                        f"ID: {role.id}"
+                    )
+                    print("--------------------------------")
+
+                continue
+
+
             if text.lower() == "yardım":
                 print("")
                 print("kanal ID")
@@ -535,6 +845,15 @@ async def terminal():
                 print("")
                 print("hedef")
                 print("→ Mevcut hedefi gösterir.")
+                print("")
+                print("channels")
+                print("→ Sunucudaki tüm kanalları ve ID'lerini listeler.")
+                print("")
+                print("roles")
+                print("→ Sunucudaki tüm rolleri ve ID'lerini listeler.")
+                print("")
+                print("Discord komutları:")
+                print("→ /rol-ver, /rol-al, /duyuru")
                 print("")
                 continue
 
