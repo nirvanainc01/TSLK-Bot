@@ -46,6 +46,24 @@ target_id = None
 
 
 # ==============================
+# ENGELLENEN KULLANICILAR
+# ==============================
+
+BLOCKED_USERS_FILE = "blocked_users.json"
+
+try:
+    with open(BLOCKED_USERS_FILE, "r", encoding="utf-8") as file:
+        BLOCKED_USER_IDS = set(int(user_id) for user_id in json.load(file))
+except (FileNotFoundError, json.JSONDecodeError, TypeError, ValueError):
+    BLOCKED_USER_IDS = set()
+
+
+def save_blocked_users():
+    with open(BLOCKED_USERS_FILE, "w", encoding="utf-8") as file:
+        json.dump(sorted(BLOCKED_USER_IDS), file, ensure_ascii=False, indent=4)
+
+
+# ==============================
 # YETKİ
 # ==============================
 
@@ -101,6 +119,28 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    # Engelli kullanıcı sunucuda mesaj yazarsa mesajını sil.
+    if (
+        message.guild is not None
+        and message.author.id in BLOCKED_USER_IDS
+    ):
+        try:
+            await message.delete()
+            print(
+                f"🗑️ Engelli kullanıcının mesajı silindi: "
+                f"{message.author} ({message.author.id})"
+            )
+        except discord.Forbidden:
+            print(
+                f"❌ Mesaj silinemedi. Botun Manage Messages yetkisi yok: "
+                f"#{getattr(message.channel, 'name', 'bilinmeyen')}"
+            )
+        except discord.HTTPException as error:
+            print(f"❌ Mesaj silme hatası: {error}")
+
+        return
+
+    # DM mesajlarını terminalde göster.
     if isinstance(message.channel, discord.DMChannel):
         print("")
         print("================================")
@@ -113,6 +153,39 @@ async def on_message(message: discord.Message):
         print("")
 
     await bot.process_commands(message)
+
+
+# ==============================
+# SES KANALI KORUMASI
+# ==============================
+
+@bot.event
+async def on_voice_state_update(
+    member: discord.Member,
+    before: discord.VoiceState,
+    after: discord.VoiceState
+):
+    if member.bot:
+        return
+
+    # Engelli kullanıcı sese girdiyse veya başka bir ses kanalına geçtiyse çıkar.
+    if member.id in BLOCKED_USER_IDS and after.channel is not None:
+        try:
+            await member.move_to(
+                None,
+                reason="Engellenen kullanıcı ses kanalına girdi."
+            )
+            print(
+                f"🔇 Engelli kullanıcı sesten atıldı: "
+                f"{member} ({member.id})"
+            )
+        except discord.Forbidden:
+            print(
+                "❌ Kullanıcı sesten atılamadı. "
+                "Botun Move Members yetkisi yok."
+            )
+        except discord.HTTPException as error:
+            print(f"❌ Ses kanalından çıkarma hatası: {error}")
 
 
 # ==============================
@@ -645,6 +718,86 @@ async def duyuru(
 
 
 # ==============================
+# ENGEL EKLE
+# ==============================
+
+@bot.tree.command(
+    name="engel-ekle",
+    description="Kullanıcıyı mesaj ve ses kanalından engeller.",
+    guild=GUILD
+)
+@app_commands.describe(
+    user_id="Engellenecek kullanıcının ID'si"
+)
+async def engel_ekle(
+    interaction: discord.Interaction,
+    user_id: str
+):
+    if not await check_permission(interaction):
+        return
+
+    try:
+        user_id_int = int(user_id)
+    except ValueError:
+        await interaction.response.send_message(
+            "❌ Geçerli bir kullanıcı ID'si gir.",
+            ephemeral=True
+        )
+        return
+
+    BLOCKED_USER_IDS.add(user_id_int)
+    save_blocked_users()
+
+    await interaction.response.send_message(
+        f"🚫 `{user_id_int}` ID'li kullanıcı engellendi.\n"
+        "Mesajları silinecek ve sese girerse sesten atılacak."
+    )
+
+
+# ==============================
+# ENGEL KALDIR
+# ==============================
+
+@bot.tree.command(
+    name="engel-kaldir",
+    description="Kullanıcının mesaj ve ses kanalındaki engelini kaldırır.",
+    guild=GUILD
+)
+@app_commands.describe(
+    user_id="Engeli kaldırılacak kullanıcının ID'si"
+)
+async def engel_kaldir(
+    interaction: discord.Interaction,
+    user_id: str
+):
+    if not await check_permission(interaction):
+        return
+
+    try:
+        user_id_int = int(user_id)
+    except ValueError:
+        await interaction.response.send_message(
+            "❌ Geçerli bir kullanıcı ID'si gir.",
+            ephemeral=True
+        )
+        return
+
+    if user_id_int not in BLOCKED_USER_IDS:
+        await interaction.response.send_message(
+            f"ℹ️ `{user_id_int}` ID'li kullanıcı zaten engelli değil.",
+            ephemeral=True
+        )
+        return
+
+    BLOCKED_USER_IDS.remove(user_id_int)
+    save_blocked_users()
+
+    await interaction.response.send_message(
+        f"✅ `{user_id_int}` ID'li kullanıcının engeli kaldırıldı."
+    )
+
+
+# ==============================
 # TERMINAL
 # ==============================
 
@@ -832,6 +985,69 @@ async def terminal():
                 continue
 
 
+            # ==========================
+            # KULLANICI ENGELLE
+            # ==========================
+
+            if text.lower().startswith("engel "):
+                value = text[6:].strip()
+
+                try:
+                    user_id = int(value)
+                except ValueError:
+                    print("❌ Geçerli kullanıcı ID gir.")
+                    continue
+
+                BLOCKED_USER_IDS.add(user_id)
+                save_blocked_users()
+                print(
+                    f"🚫 {user_id} engellendi. "
+                    "Mesajları silinecek ve sese girerse sesten atılacak."
+                )
+                continue
+
+
+            # ==========================
+            # KULLANICI ENGELİNİ KALDIR
+            # ==========================
+
+            if text.lower().startswith("engel-kaldır ") or text.lower().startswith("engel-kaldir "):
+                value = text.split(" ", 1)[1].strip()
+
+                try:
+                    user_id = int(value)
+                except ValueError:
+                    print("❌ Geçerli kullanıcı ID gir.")
+                    continue
+
+                if user_id in BLOCKED_USER_IDS:
+                    BLOCKED_USER_IDS.remove(user_id)
+                    save_blocked_users()
+                    print(f"✅ {user_id} engeli kaldırıldı.")
+                else:
+                    print(f"ℹ️ {user_id} zaten engelli değil.")
+                continue
+
+
+            # ==========================
+            # ENGELLİLERİ GÖSTER
+            # ==========================
+
+            if text.lower() == "engelliler":
+                print("")
+                print("🚫 ENGELLENEN KULLANICILAR")
+                print("================================")
+
+                if not BLOCKED_USER_IDS:
+                    print("Engellenen kullanıcı yok.")
+                else:
+                    for user_id in sorted(BLOCKED_USER_IDS):
+                        print(f"ID: {user_id}")
+
+                print("")
+                continue
+
+
             if text.lower() == "yardım":
                 print("")
                 print("kanal ID")
@@ -852,8 +1068,18 @@ async def terminal():
                 print("roles")
                 print("→ Sunucudaki tüm rolleri ve ID'lerini listeler.")
                 print("")
+                print("engel ID")
+                print("→ Kullanıcıyı mesaj ve ses kanalından engeller.")
+                print("")
+                print("engel-kaldir ID")
+                print("→ Kullanıcının engelini kaldırır.")
+                print("")
+                print("engelliler")
+                print("→ Engellenen kullanıcıların ID'lerini gösterir.")
+                print("")
                 print("Discord komutları:")
                 print("→ /rol-ver, /rol-al, /duyuru")
+                print("→ /engel-ekle, /engel-kaldir")
                 print("")
                 continue
 
